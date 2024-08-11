@@ -10,11 +10,8 @@ import (
 	types "github.com/metacubex/mihomo/constant/provider"
 	"github.com/metacubex/mihomo/log"
 
+	"github.com/sagernet/fswatch"
 	"github.com/samber/lo"
-)
-
-const (
-	minInterval = time.Minute * 5
 )
 
 var (
@@ -34,6 +31,7 @@ type Fetcher[V any] struct {
 	parser       Parser[V]
 	interval     time.Duration
 	OnUpdate     func(V)
+	watcher      *fswatch.Watcher
 }
 
 func (f *Fetcher[V]) Name() string {
@@ -117,7 +115,20 @@ func (f *Fetcher[V]) Initial() (V, error) {
 	f.hash = md5.Sum(buf)
 
 	// pull contents automatically
-	if f.interval > 0 {
+	if f.vehicle.Type() == types.File {
+		f.watcher, err = fswatch.NewWatcher(fswatch.Options{
+			Path:     []string{f.vehicle.Path()},
+			Direct:   true,
+			Callback: f.update,
+		})
+		if err != nil {
+			return lo.Empty[V](), err
+		}
+		err = f.watcher.Start()
+		if err != nil {
+			return lo.Empty[V](), err
+		}
+	} else if f.interval > 0 {
 		go f.pullLoop()
 	}
 
@@ -159,13 +170,16 @@ func (f *Fetcher[V]) Destroy() error {
 	if f.interval > 0 {
 		f.done <- struct{}{}
 	}
+	if f.watcher != nil {
+		_ = f.watcher.Close()
+	}
 	return nil
 }
 
 func (f *Fetcher[V]) pullLoop() {
 	initialInterval := f.interval - time.Since(f.UpdatedAt)
-	if initialInterval < minInterval {
-		initialInterval = minInterval
+	if initialInterval > f.interval {
+		initialInterval = f.interval
 	}
 
 	timer := time.NewTimer(initialInterval)
@@ -174,24 +188,28 @@ func (f *Fetcher[V]) pullLoop() {
 		select {
 		case <-timer.C:
 			timer.Reset(f.interval)
-			elm, same, err := f.Update()
-			if err != nil {
-				log.Errorln("[Provider] %s pull error: %s", f.Name(), err.Error())
-				continue
-			}
-
-			if same {
-				log.Debugln("[Provider] %s's content doesn't change", f.Name())
-				continue
-			}
-
-			log.Infoln("[Provider] %s's content update", f.Name())
-			if f.OnUpdate != nil {
-				f.OnUpdate(elm)
-			}
+			f.update(f.vehicle.Path())
 		case <-f.done:
 			return
 		}
+	}
+}
+
+func (f *Fetcher[V]) update(path string) {
+	elm, same, err := f.Update()
+	if err != nil {
+		log.Errorln("[Provider] %s pull error: %s", f.Name(), err.Error())
+		return
+	}
+
+	if same {
+		log.Debugln("[Provider] %s's content doesn't change", f.Name())
+		return
+	}
+
+	log.Infoln("[Provider] %s's content update", f.Name())
+	if f.OnUpdate != nil {
+		f.OnUpdate(elm)
 	}
 }
 

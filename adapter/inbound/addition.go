@@ -47,7 +47,7 @@ func WithDstAddr(addr net.Addr) Addition {
 func WithSrcAddr(addr net.Addr) Addition {
 	return func(metadata *C.Metadata) {
 		m := C.Metadata{}
-		if err := m.SetRemoteAddr(addr);err ==nil{
+		if err := m.SetRemoteAddr(addr); err == nil {
 			metadata.SrcIP = m.DstIP
 			metadata.SrcPort = m.DstPort
 		}
@@ -57,9 +57,17 @@ func WithSrcAddr(addr net.Addr) Addition {
 func WithInAddr(addr net.Addr) Addition {
 	return func(metadata *C.Metadata) {
 		m := C.Metadata{}
-		if err := m.SetRemoteAddr(addr);err ==nil{
+		if err := m.SetRemoteAddr(addr); err == nil {
 			metadata.InIP = m.DstIP
 			metadata.InPort = m.DstPort
 		}
 	}
 }
+
+func WithDSCP(dscp uint8) Addition {
+	return func(metadata *C.Metadata) {
+		metadata.DSCP = dscp
+	}
+}
+
+func Placeholder(metadata *C.Metadata) {}

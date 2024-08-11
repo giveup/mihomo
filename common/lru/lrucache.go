@@ -80,7 +80,7 @@ func New[K comparable, V any](options ...Option[K, V]) *LruCache[K, V] {
 	return lc
 }
 
-// Get returns the any representation of a cached response and a bool
+// Get returns any representation of a cached response and a bool
 // set to true if the key was found.
 func (c *LruCache[K, V]) Get(key K) (V, bool) {
 	c.mu.Lock()
@@ -110,7 +110,7 @@ func (c *LruCache[K, V]) GetOrStore(key K, constructor func() V) (V, bool) {
 	return value, true
 }
 
-// GetWithExpire returns the any representation of a cached response,
+// GetWithExpire returns any representation of a cached response,
 // a time.Time Give expected expires,
 // and a bool set to true if the key was found.
 // This method will NOT check the maxAge of element and will NOT update the expires.
@@ -135,7 +135,7 @@ func (c *LruCache[K, V]) Exist(key K) bool {
 	return ok
 }
 
-// Set stores the any representation of a response for a given key.
+// Set stores any representation of a response for a given key.
 func (c *LruCache[K, V]) Set(key K, value V) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -151,7 +151,7 @@ func (c *LruCache[K, V]) set(key K, value V) {
 	c.setWithExpire(key, value, time.Unix(expires, 0))
 }
 
-// SetWithExpire stores the any representation of a response for a given key and given expires.
+// SetWithExpire stores any representation of a response for a given key and given expires.
 // The expires time will round to second.
 func (c *LruCache[K, V]) SetWithExpire(key K, value V, expires time.Time) {
 	c.mu.Lock()
@@ -223,6 +223,10 @@ func (c *LruCache[K, V]) Delete(key K) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	c.delete(key)
+}
+
+func (c *LruCache[K, V]) delete(key K) {
 	if le, ok := c.cache[key]; ok {
 		c.deleteElement(le)
 	}
@@ -253,6 +257,34 @@ func (c *LruCache[K, V]) Clear() error {
 	c.cache = make(map[K]*list.Element[*entry[K, V]])
 
 	return nil
+}
+
+// Compute either sets the computed new value for the key or deletes
+// the value for the key. When the delete result of the valueFn function
+// is set to true, the value will be deleted, if it exists. When delete
+// is set to false, the value is updated to the newValue.
+// The ok result indicates whether value was computed and stored, thus, is
+// present in the map. The actual result contains the new value in cases where
+// the value was computed and stored.
+func (c *LruCache[K, V]) Compute(
+	key K,
+	valueFn func(oldValue V, loaded bool) (newValue V, delete bool),
+) (actual V, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if el := c.get(key); el != nil {
+		actual, ok = el.value, true
+	}
+	if newValue, del := valueFn(actual, ok); del {
+		if ok { // data not in cache, so needn't delete
+			c.delete(key)
+		}
+		return lo.Empty[V](), false
+	} else {
+		c.set(key, newValue)
+		return newValue, true
+	}
 }
 
 type entry[K comparable, V any] struct {

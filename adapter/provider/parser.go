@@ -22,30 +22,41 @@ type healthCheckSchema struct {
 	Enable         bool   `provider:"enable"`
 	URL            string `provider:"url"`
 	Interval       int    `provider:"interval"`
+	TestTimeout    int    `provider:"timeout,omitempty"`
 	Lazy           bool   `provider:"lazy,omitempty"`
 	ExpectedStatus string `provider:"expected-status,omitempty"`
 }
 
 type OverrideSchema struct {
-	UDP            *bool   `provider:"udp,omitempty"`
-	Up             *string `provider:"up,omitempty"`
-	Down           *string `provider:"down,omitempty"`
-	DialerProxy    *string `provider:"dialer-proxy,omitempty"`
-	SkipCertVerify *bool   `provider:"skip-cert-verify,omitempty"`
+	TFO              *bool   `provider:"tfo,omitempty"`
+	MPTcp            *bool   `provider:"mptcp,omitempty"`
+	UDP              *bool   `provider:"udp,omitempty"`
+	UDPOverTCP       *bool   `provider:"udp-over-tcp,omitempty"`
+	Up               *string `provider:"up,omitempty"`
+	Down             *string `provider:"down,omitempty"`
+	DialerProxy      *string `provider:"dialer-proxy,omitempty"`
+	SkipCertVerify   *bool   `provider:"skip-cert-verify,omitempty"`
+	Interface        *string `provider:"interface-name,omitempty"`
+	RoutingMark      *int    `provider:"routing-mark,omitempty"`
+	IPVersion        *string `provider:"ip-version,omitempty"`
+	AdditionalPrefix *string `provider:"additional-prefix,omitempty"`
+	AdditionalSuffix *string `provider:"additional-suffix,omitempty"`
 }
 
 type proxyProviderSchema struct {
 	Type          string `provider:"type"`
 	Path          string `provider:"path,omitempty"`
 	URL           string `provider:"url,omitempty"`
+	Proxy         string `provider:"proxy,omitempty"`
 	Interval      int    `provider:"interval,omitempty"`
 	Filter        string `provider:"filter,omitempty"`
 	ExcludeFilter string `provider:"exclude-filter,omitempty"`
 	ExcludeType   string `provider:"exclude-type,omitempty"`
 	DialerProxy   string `provider:"dialer-proxy,omitempty"`
 
-	HealthCheck healthCheckSchema `provider:"health-check,omitempty"`
-	Override    OverrideSchema    `provider:"override,omitempty"`
+	HealthCheck healthCheckSchema   `provider:"health-check,omitempty"`
+	Override    OverrideSchema      `provider:"override,omitempty"`
+	Header      map[string][]string `provider:"header,omitempty"`
 }
 
 func ParseProxyProvider(name string, mapping map[string]any) (types.ProxyProvider, error) {
@@ -60,16 +71,19 @@ func ParseProxyProvider(name string, mapping map[string]any) (types.ProxyProvide
 		return nil, err
 	}
 
-	expectedStatus, err := utils.NewIntRanges[uint16](schema.HealthCheck.ExpectedStatus)
+	expectedStatus, err := utils.NewUnsignedRanges[uint16](schema.HealthCheck.ExpectedStatus)
 	if err != nil {
 		return nil, err
 	}
 
 	var hcInterval uint
 	if schema.HealthCheck.Enable {
+		if schema.HealthCheck.Interval == 0 {
+			schema.HealthCheck.Interval = 300
+		}
 		hcInterval = uint(schema.HealthCheck.Interval)
 	}
-	hc := NewHealthCheck([]C.Proxy{}, schema.HealthCheck.URL, hcInterval, schema.HealthCheck.Lazy, expectedStatus)
+	hc := NewHealthCheck([]C.Proxy{}, schema.HealthCheck.URL, uint(schema.HealthCheck.TestTimeout), hcInterval, schema.HealthCheck.Lazy, expectedStatus)
 
 	var vehicle types.Vehicle
 	switch schema.Type {
@@ -77,16 +91,14 @@ func ParseProxyProvider(name string, mapping map[string]any) (types.ProxyProvide
 		path := C.Path.Resolve(schema.Path)
 		vehicle = resource.NewFileVehicle(path)
 	case "http":
+		path := C.Path.GetPathByHash("proxies", schema.URL)
 		if schema.Path != "" {
-			path := C.Path.Resolve(schema.Path)
+			path = C.Path.Resolve(schema.Path)
 			if !features.CMFA && !C.Path.IsSafePath(path) {
 				return nil, fmt.Errorf("%w: %s", errSubPath, path)
 			}
-			vehicle = resource.NewHTTPVehicle(schema.URL, path)
-		} else {
-			path := C.Path.GetPathByHash("proxies", schema.URL)
-			vehicle = resource.NewHTTPVehicle(schema.URL, path)
 		}
+		vehicle = resource.NewHTTPVehicle(schema.URL, path, schema.Proxy, schema.Header)
 	default:
 		return nil, fmt.Errorf("%w: %s", errVehicleType, schema.Type)
 	}

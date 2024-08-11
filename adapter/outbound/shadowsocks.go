@@ -20,6 +20,7 @@ import (
 
 	restlsC "github.com/3andne/restls-client-go"
 	shadowsocks "github.com/metacubex/sing-shadowsocks2"
+	"github.com/sagernet/sing/common/bufio"
 	M "github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/sing/common/uot"
 )
@@ -165,18 +166,18 @@ func (ss *ShadowSocks) ListenPacketContext(ctx context.Context, metadata *C.Meta
 
 // ListenPacketWithDialer implements C.ProxyAdapter
 func (ss *ShadowSocks) ListenPacketWithDialer(ctx context.Context, dialer C.Dialer, metadata *C.Metadata) (_ C.PacketConn, err error) {
-	if len(ss.option.DialerProxy) > 0 {
-		dialer, err = proxydialer.NewByName(ss.option.DialerProxy, dialer)
-		if err != nil {
-			return nil, err
-		}
-	}
 	if ss.option.UDPOverTCP {
 		tcpConn, err := ss.DialContextWithDialer(ctx, dialer, metadata)
 		if err != nil {
 			return nil, err
 		}
 		return ss.ListenPacketOnStreamConn(ctx, tcpConn, metadata)
+	}
+	if len(ss.option.DialerProxy) > 0 {
+		dialer, err = proxydialer.NewByName(ss.option.DialerProxy, dialer)
+		if err != nil {
+			return nil, err
+		}
 	}
 	addr, err := resolveUDPAddrWithPrefer(ctx, "udp", ss.addr, ss.prefer)
 	if err != nil {
@@ -187,7 +188,7 @@ func (ss *ShadowSocks) ListenPacketWithDialer(ctx context.Context, dialer C.Dial
 	if err != nil {
 		return nil, err
 	}
-	pc = ss.method.DialPacketConn(N.NewBindPacketConn(pc, addr))
+	pc = ss.method.DialPacketConn(bufio.NewBindPacketConn(pc, addr))
 	return newPacketConn(pc, ss), nil
 }
 
@@ -272,6 +273,7 @@ func NewShadowSocks(option ShadowSocksOption) (*ShadowSocks, error) {
 		if opts.TLS {
 			v2rayOption.TLS = true
 			v2rayOption.SkipCertVerify = opts.SkipCertVerify
+			v2rayOption.Fingerprint = opts.Fingerprint
 		}
 	} else if option.Plugin == shadowtls.Mode {
 		obfsMode = shadowtls.Mode

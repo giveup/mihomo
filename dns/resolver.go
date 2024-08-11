@@ -146,9 +146,12 @@ func (r *Resolver) ExchangeContext(ctx context.Context, m *D.Msg) (msg *D.Msg, e
 	}()
 
 	q := m.Question[0]
+	domain := msgToDomain(m)
+	_, qTypeStr := msgToQtype(m)
 	cacheM, expireTime, hit := r.cache.GetWithExpire(q.String())
 	if hit {
-		log.Debugln("[DNS] cache hit for %s, expire at %s", q.Name, expireTime.Format("2006-01-02 15:04:05"))
+		ips := msgToIP(cacheM)
+		log.Debugln("[DNS] cache hit %s --> %s %s, expire at %s", domain, ips, qTypeStr, expireTime.Format("2006-01-02 15:04:05"))
 		now := time.Now()
 		msg = cacheM.Copy()
 		if expireTime.Before(now) {
@@ -324,7 +327,7 @@ func (r *Resolver) ipExchange(ctx context.Context, m *D.Msg) (msg *D.Msg, err er
 func (r *Resolver) lookupIP(ctx context.Context, host string, dnsType uint16) (ips []netip.Addr, err error) {
 	ip, err := netip.ParseAddr(host)
 	if err == nil {
-		isIPv4 := ip.Is4()
+		isIPv4 := ip.Is4() || ip.Is4In6()
 		if dnsType == D.TypeAAAA && !isIPv4 {
 			return []netip.Addr{ip}, nil
 		} else if dnsType == D.TypeA && isIPv4 {
@@ -400,7 +403,7 @@ type FallbackFilter struct {
 	GeoIPCode string
 	IPCIDR    []netip.Prefix
 	Domain    []string
-	GeoSite   []*router.DomainMatcher
+	GeoSite   []router.DomainMatcher
 }
 
 type Config struct {
@@ -414,7 +417,7 @@ type Config struct {
 	Pool           *fakeip.Pool
 	Hosts          *trie.DomainTrie[resolver.HostValue]
 	Policy         *orderedmap.OrderedMap[string, []NameServer]
-	RuleProviders  map[string]provider.RuleProvider
+	Tunnel         provider.Tunnel
 	CacheAlgorithm string
 }
 
@@ -483,11 +486,14 @@ func NewResolver(config Config) *Resolver {
 		r.policy = make([]dnsPolicy, 0)
 
 		var triePolicy *trie.DomainTrie[[]dnsClient]
-		insertTriePolicy := func() {
+		insertPolicy := func(policy dnsPolicy) {
 			if triePolicy != nil {
 				triePolicy.Optimize()
 				r.policy = append(r.policy, domainTriePolicy{triePolicy})
 				triePolicy = nil
+			}
+			if policy != nil {
+				r.policy = append(r.policy, policy)
 			}
 		}
 
@@ -499,11 +505,12 @@ func NewResolver(config Config) *Resolver {
 				key := temp[1]
 				switch prefix {
 				case "rule-set":
-					if p, ok := config.RuleProviders[key]; ok {
+					if _, ok := config.Tunnel.RuleProviders()[key]; ok {
 						log.Debugln("Adding rule-set policy: %s ", key)
-						r.policy = append(r.policy, domainSetPolicy{
-							domainSetProvider: p,
-							dnsClients:        cacheTransform(nameserver),
+						insertPolicy(domainSetPolicy{
+							tunnel:     config.Tunnel,
+							name:       key,
+							dnsClients: cacheTransform(nameserver),
 						})
 						continue
 					} else {
@@ -521,8 +528,7 @@ func NewResolver(config Config) *Resolver {
 						log.Warnln("adding geosite policy %s error: %s", key, err)
 						continue
 					}
-					insertTriePolicy()
-					r.policy = append(r.policy, geositePolicy{
+					insertPolicy(geositePolicy{
 						matcher:    matcher,
 						inverse:    inverse,
 						dnsClients: cacheTransform(nameserver),
@@ -535,7 +541,7 @@ func NewResolver(config Config) *Resolver {
 			}
 			_ = triePolicy.Insert(domain, cacheTransform(nameserver))
 		}
-		insertTriePolicy()
+		insertPolicy(nil)
 	}
 
 	fallbackIPFilters := []fallbackIPFilter{}
